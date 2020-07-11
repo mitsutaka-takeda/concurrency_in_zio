@@ -1,27 +1,22 @@
 package chapter4
 
+import java.util.concurrent.TimeUnit
+
 import zio.clock.Clock
-import zio.stream.ZStream
-import zio.{ExitCode, Promise, UIO, URIO}
 import zio.duration._
+import zio.stream.ZStream
+import zio.{ExitCode, URIO}
 
-/**
- * StreamのキャンセルはPromiseとhaltWhenで行うことができる。
- */
 object OrDone extends zio.App {
-  // 毎秒１を出力するストリーム。
-  val stream: ZStream[Clock, Nothing, Int] = zio.stream.ZStream.tick(1.second).map(_ => 1)
+  def sig(after: Duration): ZStream[Clock, Nothing, Unit] = zio.stream.ZStream.succeed(()).schedule(
+    zio.Schedule.fromDuration(after)
+  )
 
-  // ストリーム完了用のプロミス。
-  val done: UIO[Promise[Nothing, Unit]] = zio.Promise.make[Nothing, Unit]
-
-  /**
-   * 標準入力から入力があるまで、毎秒1を出力するプログラム。
-   */
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] = for {
-    p <- done
-    f <- stream.haltWhen(p).foreach(i => zio.console.putStrLn(i.toString)).fork // Streamの処理は別ファイバーで。
-    _ <- zio.console.getStrLn.flatMap(_ => p.complete(UIO.unit)).orDie // 入力が有った時点でPromiseをトリガー。
-    _ <- f.join
+    (took, _) <- ZStream.mergeAllUnbounded()( // (1)
+      List(2.hours, 5.minutes, 1.second, 1.hour, 1.minute).map(sig): _*
+    ).take(1).runDrain // (2)
+      .summarized(zio.clock.currentTime(TimeUnit.MILLISECONDS)) { case (start, end) => end - start }
+    _ <- zio.console.putStrLn(s"done after ${took} msec") // => done after 2000 milliseconds
   } yield ExitCode.success
 }

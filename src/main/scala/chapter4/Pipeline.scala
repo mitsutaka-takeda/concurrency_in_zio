@@ -2,62 +2,43 @@ package chapter4
 
 import java.util.concurrent.TimeUnit
 
-import zio.duration.Duration
+import zio.clock.Clock
+import zio.console.Console
+import zio.duration.{Duration, _}
 import zio.stream.ZStream
-import zio.{ExitCode, UIO, URIO, ZIO}
-import zio.duration._
+import zio.{ExitCode, URIO, ZIO}
 
 object Pipeline extends zio.App {
   type UStream[A] = zio.stream.ZStream[zio.ZEnv, Nothing, A]
 
+  val source: ZStream[Console, Nothing, Int] = ZStream.range(1, 4).tap(i => zio.console.putStrLn(s"in range: ${i.toString}"))
+
+  def printAndRecordTime(str: ZStream[zio.ZEnv, Nothing, Int]): ZIO[zio.ZEnv, Nothing, Long] = str.foreach(
+    i => zio.console.putStrLn(i.toString)
+  ).summarized(zio.clock.currentTime(TimeUnit.MILLISECONDS)) { case (start, end) => end - start }.map(_._1)
+
   val delay: Duration = 1000.milliseconds
 
-  val baseline: ZIO[zio.ZEnv, Nothing, Long] = {
-    def multiply(ints: UStream[Int], multiplier: Int): UStream[Int] = ints.mapM(i => {
-      UIO(i * multiplier)
-    })
-
-    def add(ints: UStream[Int], additive: Int): UStream[Int] = ints.mapM(i =>
-      UIO(i + additive)
-    )
-
-    add(multiply(ZStream.range(1, 4).tap(i => zio.console.putStrLn(s"in range: ${i.toString}")), 2), 1).foreach(
-      i => zio.console.putStrLn(i.toString)
-    ).summarized(zio.clock.currentTime(TimeUnit.MILLISECONDS)) { case (start, end) => end - start }.map(_._1)
+  def multiply(multiplier: Int): Int => ZIO[Clock, Nothing, Int] = (i: Int) => {
+    zio.clock.sleep(delay).as(i * multiplier) // (1)
   }
 
-  val nonConcurrency: ZIO[zio.ZEnv, Nothing, Long] = {
-    def multiply(ints: UStream[Int], multiplier: Int): UStream[Int] = ints.mapM(i => {
-      zio.clock.sleep(delay).as(i * multiplier)
-    })
+  def add(additive: Int): Int => ZIO[Clock, Nothing, Int] = (i: Int) =>
+    zio.clock.sleep(delay).as(i + additive) // (1)
 
-    def add(ints: UStream[Int], additive: Int): UStream[Int] = ints.mapM(i =>
-      zio.clock.sleep(delay).as(i + additive)
-    )
 
-    add(multiply(ZStream.range(1, 4).tap(i => zio.console.putStrLn(s"in range: ${i.toString}")), 2), 1).foreach(
-      i => zio.console.putStrLn(i.toString)
-    ).summarized(zio.clock.currentTime(TimeUnit.MILLISECONDS)) { case (start, end) => end - start }.map(_._1)
+  val nonConcurrency: ZIO[zio.ZEnv, Nothing, Long] = { // (2)
+    printAndRecordTime(source.mapM(multiply(2)).mapM(add(1)))
   }
 
-  val concurrency: ZIO[zio.ZEnv, Nothing, Long] = {
-    def multiply(ints: UStream[Int], multiplier: Int): UStream[Int] = ints.mapMPar(1)(i => {
-      zio.clock.sleep(delay).as(i * multiplier)
-    })
-
-    def add(ints: UStream[Int], additive: Int): UStream[Int] = ints.mapMPar(1)(i =>
-      zio.clock.sleep(delay).as(i + additive)
-    )
-
-    add(multiply(ZStream.range(1, 4).tap(i => zio.console.putStrLn(s"in range: ${i.toString}")), 2), 1).foreach(
-      i => zio.console.putStrLn(i.toString)
-    ).summarized(zio.clock.currentTime(TimeUnit.MILLISECONDS)) { case (start, end) => end - start }.map(_._1)
+  val concurrency: ZIO[zio.ZEnv, Nothing, Long] = { // (3)
+    printAndRecordTime(source.mapMPar(1)(multiply(2)).mapMPar(1)(add(1)))
   }
 
   override def run(args: List[String]): URIO[zio.ZEnv, ExitCode] = for {
-    timingInMilliSec <- baseline
-    // nonConcurrency
+    timingInMilliSec <- concurrency
+      // nonConcurrency
     // concurrency
-    _ <- zio.console.putStrLn(s"took $timingInMilliSec msec")
+    _ <- zio.console.putStrLn(s"took $timingInMilliSec msec") // nonConcurrency => 7420 msec, concurrency => 5759 msec
   } yield ExitCode.success
 }

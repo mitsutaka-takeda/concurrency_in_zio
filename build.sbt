@@ -6,6 +6,8 @@ scalaVersion := "2.13.3"
 
 val zioVersion = "1.0.0-RC21-1"
 
+addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1")
+
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio" % zioVersion,
   "dev.zio" %% "zio-streams" % zioVersion,
